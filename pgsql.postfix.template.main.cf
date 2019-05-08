@@ -1,0 +1,377 @@
+#    Copyright 2014 Chris Caron <lead2gold@gmail.com>
+#
+#    This is free software: you can redistribute it and/or modify it under the
+#    terms of the GNU General Public License as published by the Free Software
+#    Foundation, either version 3 of the License, or (at your option) any later
+#    version.
+#
+#    This file is distributed in the hope that it will be useful, but WITHOUT
+#    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+#    FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+#    more details.
+#
+#    You should have received a copy of the GNU General Public License along
+#    with this file. If not, see http://www.gnu.org/licenses/.
+###############################################################################
+#
+# This template prepares the core configuration of postfix in a manner that
+# it's intended to reference a Postgresql Database.
+#
+# I did my best to document the entire file to make it both easy to learn from
+# and troubleshoot.
+#
+# For more information visit http://nuxref.com
+#
+#? The simpliest way to preform this might be doing this on the shell:
+#?
+#?     # Define your variables
+#?     DOMAIN=nuxref.com
+#?     VHOST_HOME=/var/mail/vhost
+#?     VHOST_UID=5000
+#?     VHOST_GID=5000
+#?
+#?     # Create a copy of this template with the variables populated correctly:
+#?     sed -e "/^#?/d" \
+#?         -e "s/%DOMAIN%/$DOMAIN/g" \
+#?         -e "s|%VHOST_HOME%|$VHOST_HOME|g" \
+#?         -e "s/%VHOST_UID%/$VHOST_UID/g" \
+#?         -e "s/%VHOST_GID%/$VHOST_GID/g" \
+#?             pgsql.postfix.template.main.cf > \
+#?                 /etc/postfix/main.cf
+
+##############################################################################
+# Globals
+##############################################################################
+sql      = pgsql:${config_directory}/pgsql/
+proxysql = proxy:${sql}
+
+##############################################################################
+# Defaults
+##############################################################################
+
+# Operate as user:
+mail_owner = postfix
+
+# Set some directory paths
+queue_directory = /var/spool/postfix
+command_directory = /usr/sbin
+daemon_directory = /usr/libexec/postfix
+data_directory = /var/lib/postfix
+manpage_directory = /usr/share/man
+sample_directory = /usr/share/doc/postfix-2.6.6/samples
+readme_directory = /usr/share/doc/postfix-2.6.6/README_FILES
+
+# it's easier to transfer everything into a virtual domain
+# and work from that
+myhostname = mail.%DOMAIN%
+
+# Define Domain Name
+mydomain = %DOMAIN%
+
+# This is only used if append_dot_mydomain is set. It is what Remote addresses
+# get rewritten to if sent to our machine without a domain trailing the user.
+# hence an email addressed to 'root' from outside our local network would
+# be changed to 'root@invalid.domain' if this directive was defined as
+# 'invalid_domain'. We never want to assume what the outside is doing, so just
+# don't rename it to anything by leaving this directive emtpy.  Let our server
+# bounce the mail back to the sender.
+remote_header_rewrite_domain =
+
+# Locally submitted mail has  appended to it, hence: emails delivered
+# to 'root' go automatically to root@nuxref.com. Remotely submitted mail takes on
+# the the value the 'remote_header_rewrite_domain' directive is set to.
+append_dot_mydomain = yes
+
+# Send mail as user@domainname instead of user@hostname
+myorigin = $mydomain
+
+# Collect mail from all interfaces
+inet_interfaces = all
+inet_protocols = all
+
+# when Postfix should forward mail from only the local machine
+# and don't relay mail from other hosts
+mynetworks_style = host
+mynetworks = 127.0.0.0/8
+
+# mydestination defines fixed destiantions we accept mail on. Domains are
+# convigured in the virtual table of the database (including $mydomain) so
+# we have no reason to include it here
+mydestination = $myhostname, localhost.$mydomain, localhost
+
+# Do not relay mail
+relayhost =
+relay_domains = ${proxysql}relay_domains.cf
+
+unknown_local_recipient_reject_code = 550
+debug_peer_level = 2
+debugger_command =
+   PATH=/bin:/usr/bin:/usr/local/bin:/usr/X11R6/bin
+   ddd $daemon_directory/$process_name $process_id & sleep 5
+sendmail_path = /usr/sbin/sendmail.postfix
+newaliases_path = /usr/bin/newaliases.postfix
+mailq_path = /usr/bin/mailq.postfix
+setgid_group = postdrop
+html_directory = no
+
+# Local System Aliases (call 'newaliases' when you change these)
+alias_maps = hash:/etc/aliases
+alias_database = hash:/etc/aliases
+
+# enable this line with the amvisfeed entries in master.cf
+content_filter = amavisfeed:[127.0.0.1]:10024
+
+##############################################################################
+# Message pre-processing
+##############################################################################
+# Allow header checking for bad content preventing spam and/or viruses
+header_checks = regexp:/etc/postfix/header_checks
+
+##############################################################################
+# Virtual Server Configuration
+##############################################################################
+virtual_transport = dovecot
+virtual_mailbox_base = %VHOST_HOME%
+virtual_uid_maps = static:%VHOST_UID%
+virtual_gid_maps = static:%VHOST_GID%
+virtual_mailbox_domains = ${proxysql}virtual_domains_maps.cf
+virtual_alias_maps = ${proxysql}virtual_alias_maps.cf
+virtual_mailbox_maps = ${proxysql}virtual_mailbox_maps.cf
+virtual_mailbox_limit_maps = ${sql}virtual_mailbox_limit_maps.cf
+virtual_mailbox_limit_override = yes
+virtual_maildir_limit_message = Sorry, this user has exceeded their disk space quota, please try again later.
+virtual_create_maildirsize = yes
+virtual_mailbox_extended = yes
+virtual_overquota_bounce = yes
+
+# Transport Control really boils down to these three options
+# dovecot: - all virtual and local mail should go through this. This should be
+#            what 99% of all your transports are configured as unless you
+#            know what you're doing <span class="wp-smiley emoji emoji-smile" title=":)">:)</span>
+# relay:   - used if you are going to relay mail for a domain (a backup mail
+#            server does this for it's primary)
+# vacation:- This one is reserved for auto-responses for vacation use only
+#            configured with the 'autoreply.%DOMAIN%'.
+#            /var/spool/vacation/vacation.pl will look after correctly relaying
+#            mail from the virtual domains configured with the'dovecot:'
+#            transport.
+transport_maps = ${proxysql}transport_maps.cf
+
+# local Recipients
+local_transport = virtual
+local_recipient_map = $virtual_mailbox_maps
+
+# dovecot lmtp reference
+mailbox_command = /usr/libexec/dovecot/deliver
+
+# allow a 'Delivered-To' header to be added to my messages can be
+# acomplished through the below setting
+dovecot_destination_recipient_limit = 1
+
+##############################################################################
+# SASL
+##############################################################################
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+smtpd_sasl_auth_enable = yes
+
+# Use authenticated header for debugging only
+smtpd_sasl_authenticated_header = no
+smtpd_sasl_local_domain =
+smtpd_sasl_security_options = noanonymous
+
+# Clients like Microsoft Outlook Express version 4 and Microsoft Exchange
+# version 5 need this; don't use it if it doesn't apply to you
+broken_sasl_auth_clients = no
+
+##############################################################################
+# SMTP
+##############################################################################
+# wait until the 'RCPT TO' or ETRN command is given before evaluating the
+# smtpd_client_restrictions, smtpd_helo_restrictions, smtpd_sender_restrictions,
+# flags
+smtpd_delay_reject = yes
+
+# Optional access restrictions that the Postfix SMTP server applies in the
+# context of the SMTP DATA command
+smtpd_data_restrictions = reject_unauth_pipelining
+
+# home-grown application support
+#  smtpd_helo_required = no
+#  strict_rfc821_envelopes = no
+
+# helo_requries forces clients to initiate all smtp handshaking with the
+# keyword HELO or EHLO, with this disabled then applications can just
+# go right ahead and start using the MAIL FROM directive.
+smtpd_helo_required = no
+
+# rfc821 requires clients to enclose their email addresses with <>
+# strict_rfc821_envelopes = yes? then ONLY this is valid:
+#         MAIL FROM: <dude@example.com>
+#         MAIL FROM: the dude <dude@example.com>
+# strict_rfc821_envelopes = no? then this is valid too:
+#         MAIL FROM: dude@example.com
+strict_rfc821_envelopes = no
+
+# Disable the SMTP VRFY command. This stops some techniques used to harvest
+# email addresses.
+disable_vrfy_command = yes
+
+# Reject list:
+# permit_mynetworks:
+#    always allow all networks identified with 'mynetworks=' defined earlier
+#    in this file.
+#
+# reject_sender_login_mismatch:
+#   Reject when the sender is not from a fully qualified domain (ie.
+#   someuser@fakedomain as opposed to someuser@fakedomain.com)
+#
+# reject_unauth_destination:
+#   Reject when the receiver is not from a fully qualified domain (ie.
+#   someuser@fakedomain as opposed to someuser@fakedomain.com)
+#
+# reject_non_fqdn_sender:
+#   This does a DNS lookup to verify that the domain is a real domain.
+#
+# reject_non_fqdn_recipient:
+#   This does a DNS lookup to verify that the domain is a real domain.
+#
+# reject_unknown_sender_domain:
+#
+# reject_unknown_recipient_domain:
+#
+# permit_sasl_authenticated:
+#    They sucessfully registered with our system therefore we trust them.
+
+smtpd_recipient_restrictions =
+   permit_sasl_authenticated
+   permit_mynetworks
+   reject_unauth_destination
+
+smtpd_relay_restrictions =
+   permit_mynetworks
+   permit_sasl_authenticated
+   defer_unauth_destination
+
+# Great info on Spam Blacklists: http://en.linuxreviews.org/Spam_blacklists
+# Spamhaus Block List =  zen.spamhaus.org
+smtpd_client_restrictions =
+   permit_sasl_authenticated
+   reject_rbl_client zen.spamhaus.org
+
+##############################################################################
+#TLS
+##############################################################################
+smtpd_use_tls = yes
+smtpd_tls_auth_only = yes
+smtpd_tls_security_level = may
+smtpd_tls_CAfile = /etc/pki/tls/certs/ca-bundle.crt
+smtpd_tls_cert_file = /etc/pki/tls/certs/%DOMAIN%.crt
+smtpd_tls_key_file = /etc/pki/tls/private/%DOMAIN%.key
+smtpd_tls_received_header = yes
+smtpd_tls_ask_ccert = yes
+smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache
+smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
+smtpd_sender_restrictions =
+   permit_mynetworks
+   permit_sasl_authenticated
+   reject_unauth_destination
+   reject_unauth_pipelining
+
+# Log level only nessisary if debugging
+smtpd_tls_loglevel = 0
+
+##############################################################################
+# Vacation Support
+##############################################################################
+vacation_destination_recipient_limit = 1
+
+##############################################################################
+# Denial of Service Prevention
+##############################################################################
+
+# The amount of delay postfix will set on it's responses to the client when
+# they reach more then  and less then
+# the 'smtpd_hard_error_limit' directive
+smtpd_error_sleep_time = 5s
+
+# The number of errors a client is allowed to make without actually delivering
+# mail to the server before postfix starts to slow down it's responses to the
+# client.
+smtpd_soft_error_limit = 10
+# The maximum number of errors a client is allowed to make before postfix
+# starts to disconnect them right away.
+smtpd_hard_error_limit = 20
+
+# The number of concurrent connections for sending mail, the default
+# is 50 which seems a bit high. If your machine has tons of ram, you could
+# probably leave this value at 50
+smtpd_client_connection_count_limit = 10
+
+# Only allow 'X' connections per the time interval defined by the
+# 'anvil_rate_time_unit' directive
+smtpd_client_connection_rate_limit = 20
+
+# The maximum number of new TLS sessions (without using the TLS session
+# cache) that an SMTP client may negotiate
+smtpd_client_new_tls_session_rate_limit = 20
+
+# defines the time window that we can monitor connection rates within
+# defined by the '*_rate_limit' directives
+anvil_rate_time_unit = 60s
+
+##############################################################################
+# Blacklist Prevention
+##############################################################################
+
+# The number of recipients the SMTP server will take per message delivery
+# request; this affects 'all' recipients
+smtpd_recipient_limit = 50
+
+# The number of recipients that a remote SMTP client can send in excess of the
+# hard limit specified with 'smtpd_recipient_limit' directive before the
+# Postfix SMTP server increments the per-session error count for each excess
+# recipient
+smtpd_recipient_overshoot_limit = 50
+
+# The maximal number of recipient addresses that any client is allowed to send
+# to this service per time unit, regardless of whether or not Postfix actually
+# accepts those recipients. Do not use this feature to regulate legitimate
+# mail traffic.  Ideally keep this value as low as possible until a customer
+# complains that they can't send to X people (then increase it to something
+# higher then 'x'). The default is 'unlimited' which seems a bit to open
+smtpd_client_recipient_rate_limit = 50
+
+# The default maximal number of recipients per message delivery. The default
+# is 50, but it makes sense to re-iterate it here again in the config file
+# to see what the throttle is set to
+default_destination_recipient_limit = 50
+
+# The maximal number of recipients per message for the smtp message delivery
+# transport. This limit is enforced by our very own queue manager.
+# Enstrict these same restrictions as we just specified, there is no reason
+# to handle things different internally
+smtp_destination_recipient_limit = $default_destination_recipient_limit
+
+##############################################################################
+# Performance
+##############################################################################
+
+# The extra per-transport limit imposed on the number of in-memory recipients.
+# This extra recipient space is reserved for the cases when the Postfix queue
+# manager's scheduler preempts one message with another and suddenly needs some
+# extra recipients slots for the chosen message in order to avoid performance
+# degradation.  The default is 1000 but can safely be lowered significantly
+# for smaller systems
+default_extra_recipient_limit = 250
+
+# The maximal number of addresses remembered by the address duplicate filter
+# for aliases(5) or virtual(5) alias expansion, or for showq(8) queue displays.
+duplicate_filter_limit = 50
+
+# Whether or not to use the local biff service. This service sends "new mail"
+# notifications to users who have requested new mail notification with the UNIX
+# command "biff y".  If you're not using biff, or have thousands of users, you
+# may want to consider disabling this as this feature does disable the overall
+# performance of postfix
+biff = no

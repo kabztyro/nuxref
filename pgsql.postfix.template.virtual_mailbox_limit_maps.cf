@@ -1,0 +1,50 @@
+#    Copyright 2014 Chris Caron <lead2gold@gmail.com>
+#
+#    This is free software: you can redistribute it and/or modify it under the
+#    terms of the GNU General Public License as published by the Free Software
+#    Foundation, either version 3 of the License, or (at your option) any later
+#    version.
+#
+#    This file is distributed in the hope that it will be useful, but WITHOUT
+#    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+#    FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+#    more details.
+#
+#    You should have received a copy of the GNU General Public License along
+#    with this file. If not, see http://www.gnu.org/licenses/.
+###############################################################################
+#
+# This template prepares a mapping of local mailbox disk quotas we maintain in
+# a PostgreSQL database. For more information visit http://nuxref.com
+#
+#? The simpliest way to uset this template might be just doing the following
+#? at the shell prompt:
+#?
+#?     # Directory to store our configuration in (if its not already there).
+#?     [ ! -d /etc/postfix/pgsql ] && \
+#?         mkdir -p /etc/postfix/pgsql
+#?
+#?     # Secure this new directory since it will contain passwords information.
+#?     chmod 750 /etc/postfix/pgsql
+#?     chown root.postfix /etc/postfix/pgsql
+#?
+#?     # Define your variables
+#?     PGROUSER=mailreader
+#?     PGROPASS=mailreader
+#?     PGHOST=localhost
+#?     PGNAME=system_mail
+#?
+#?     # Create a copy of this template with the variables populated correctly:
+#?     sed -e "/^#?/d" \
+#?         -e "s/%PGROUSER%/$PGROUSER/g" \
+#?         -e "s/%PGROPASS%/$PGROPASS/g" \
+#?         -e "s/%PGHOST%/$PGHOST/g" \
+#?         -e "s/%PGNAME%/$PGNAME/g" \
+#?             pgsql.postfix.template.virtual_mailbox_limit_maps.cf > \
+#?                 /etc/postfix/pgsql/virtual_mailbox_limit_maps.cf
+#?
+user=%PGROUSER%
+password=%PGROPASS%
+hosts=%PGHOST%
+dbname=%PGNAME%
+query = SELECT quota FROM mailbox WHERE username='%s' AND active = true
